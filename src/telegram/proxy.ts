@@ -25,10 +25,10 @@ export function resolveProxyUrl(configProxy?: string): string | undefined {
     return explicit;
   }
   return (
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
+    process.env.HTTPS_PROXY?.trim() ||
+    process.env.https_proxy?.trim() ||
+    process.env.HTTP_PROXY?.trim() ||
+    process.env.http_proxy?.trim() ||
     undefined
   );
 }
