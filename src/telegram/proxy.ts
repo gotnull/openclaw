@@ -1,3 +1,4 @@
+import process from "node:process";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
@@ -12,4 +13,22 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   // Return raw proxy fetch; call sites that need AbortSignal normalization
   // should opt into resolveFetch/wrapFetchWithAbortSignal once at the edge.
   return fetcher;
+}
+
+/**
+ * Resolve the proxy URL from config or standard environment variables.
+ * Priority: explicit config > HTTPS_PROXY > HTTP_PROXY (case-insensitive).
+ */
+export function resolveProxyUrl(configProxy?: string): string | undefined {
+  const explicit = configProxy?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    undefined
+  );
 }
