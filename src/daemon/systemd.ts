@@ -29,7 +29,15 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
-function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
+function resolveSystemdUnitPathForName(
+  env: GatewayServiceEnv,
+  name: string,
+  scope?: string[],
+): string {
+  const isSystemScope = scope !== undefined && scope.length === 0;
+  if (isSystemScope) {
+    return path.posix.join("/etc", "systemd", "system", `${name}.service`);
+  }
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
@@ -42,8 +50,8 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
 }
 
-function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
-  return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
+function resolveSystemdUnitPath(env: GatewayServiceEnv, scope?: string[]): string {
+  return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env), scope);
 }
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
@@ -58,7 +66,8 @@ export type { SystemdUserLingerStatus };
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const unitPath = resolveSystemdUnitPath(env);
+  const scope = await resolveSystemctlScopeArgs();
+  const unitPath = resolveSystemdUnitPath(env, scope);
   try {
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
@@ -246,7 +255,8 @@ export async function installSystemdService({
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   await assertSystemdAvailable();
 
-  const unitPath = resolveSystemdUnitPath(env);
+  const scope = await resolveSystemctlScopeArgs();
+  const unitPath = resolveSystemdUnitPath(env, scope);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
 
   // Preserve user customizations: back up existing unit file before overwriting.
@@ -317,7 +327,8 @@ export async function uninstallSystemdService({
   const unitName = `${serviceName}.service`;
   await scopedSystemctl(["disable", "--now", unitName]);
 
-  const unitPath = resolveSystemdUnitPath(env);
+  const scope = await resolveSystemctlScopeArgs();
+  const unitPath = resolveSystemdUnitPath(env, scope);
   try {
     await fs.unlink(unitPath);
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
@@ -434,8 +445,9 @@ async function isSystemctlAvailable(): Promise<boolean> {
 export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable();
+  const scope = await resolveSystemctlScopeArgs();
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
-    const unitPath = resolveSystemdUnitPathForName(env, name);
+    const unitPath = resolveSystemdUnitPathForName(env, name, scope);
     let exists = false;
     try {
       await fs.access(unitPath);
