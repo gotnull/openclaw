@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -107,9 +110,22 @@ describe("extractReadPaths", () => {
 });
 
 describe("auditPostCompactionReads", () => {
-  const workspaceDir = "/Users/test/workspace";
+  let workspaceDir: string;
+
+  beforeEach(() => {
+    workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-audit-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  });
 
   it("passes when all required files are read", () => {
+    // Create the files on disk so the audit considers them required
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const readPaths = ["WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
@@ -117,7 +133,19 @@ describe("auditPostCompactionReads", () => {
     expect(result.missingPatterns).toEqual([]);
   });
 
-  it("fails when no files are read", () => {
+  it("skips non-existent files — no false warnings", () => {
+    // Neither WORKFLOW_AUTO.md nor memory/ exist → audit should pass
+    const result = auditPostCompactionReads([], workspaceDir);
+
+    expect(result.passed).toBe(true);
+    expect(result.missingPatterns).toEqual([]);
+  });
+
+  it("fails when existing required files are not read", () => {
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const result = auditPostCompactionReads([], workspaceDir);
 
     expect(result.passed).toBe(false);
@@ -126,6 +154,10 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("reports only missing files", () => {
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const readPaths = ["WORKFLOW_AUTO.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
@@ -135,6 +167,10 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("matches RegExp patterns against relative paths", () => {
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const readPaths = ["memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
@@ -144,6 +180,10 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("normalizes relative paths when matching", () => {
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const readPaths = ["./WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
@@ -152,9 +192,13 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("normalizes absolute paths when matching", () => {
+    fs.writeFileSync(path.join(workspaceDir, "WORKFLOW_AUTO.md"), "test");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "memory", "2026-02-16.md"), "test");
+
     const readPaths = [
-      "/Users/test/workspace/WORKFLOW_AUTO.md",
-      "/Users/test/workspace/memory/2026-02-16.md",
+      path.join(workspaceDir, "WORKFLOW_AUTO.md"),
+      path.join(workspaceDir, "memory", "2026-02-16.md"),
     ];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
@@ -163,6 +207,8 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("accepts custom required reads list", () => {
+    fs.writeFileSync(path.join(workspaceDir, "custom.md"), "test");
+
     const readPaths = ["custom.md"];
     const customRequired = ["custom.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);

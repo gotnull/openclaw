@@ -8,6 +8,31 @@ const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
 ];
 
 /**
+ * Check if any files matching the pattern exist in the workspace directory.
+ * Uses a shallow scan of common memory subdirectories to avoid expensive
+ * recursive walks.
+ */
+function findMatchingFiles(workspaceDir: string, pattern: RegExp): boolean {
+  // Check common locations: workspace root and memory/ subdirectory.
+  const dirs = [workspaceDir, path.join(workspaceDir, "memory")];
+  for (const dir of dirs) {
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const entry of entries) {
+        const rel = path.relative(workspaceDir, path.join(dir, entry));
+        const normalizedRel = rel.split(path.sep).join("/");
+        if (pattern.test(normalizedRel)) {
+          return true;
+        }
+      }
+    } catch {
+      // Directory doesn't exist — skip.
+    }
+  }
+  return false;
+}
+
+/**
  * Audit whether agent read required startup files after compaction.
  * Returns list of missing file patterns.
  */
@@ -22,12 +47,22 @@ export function auditPostCompactionReads(
   for (const required of requiredReads) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
+      // Skip files that don't exist in the workspace — agents shouldn't be
+      // asked to read files that were never created (#29243).
+      if (!fs.existsSync(requiredResolved)) {
+        continue;
+      }
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
         missingPatterns.push(required);
       }
     } else {
-      // RegExp — match against relative paths from workspace
+      // RegExp — match against relative paths from workspace.
+      // First check if any matching files exist on disk before flagging as missing.
+      const matchingFilesExist = findMatchingFiles(workspaceDir, required);
+      if (!matchingFilesExist) {
+        continue;
+      }
       const found = readFilePaths.some((p) => {
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
         // Normalize to forward slashes for cross-platform RegExp matching
