@@ -84,7 +84,6 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           skipVerification: config.skipSignatureVerification,
           ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
           webhookSecurity: config.webhookSecurity,
-          inboundGreeting: config.inboundGreeting,
         },
       );
     case "mock":

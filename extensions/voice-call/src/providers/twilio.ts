@@ -504,11 +504,21 @@ export class TwilioProvider implements VoiceCallProvider {
    * Used for inbound calls when inboundGreeting is configured.
    */
   private getGreetingThenStreamXml(greeting: string, streamUrl: string): string {
+    // Reuse the same URL/token extraction as getStreamConnectXml —
+    // Twilio strips query params from WebSocket URLs.
+    const parsed = new URL(streamUrl);
+    const token = parsed.searchParams.get("token");
+    parsed.searchParams.delete("token");
+    const cleanUrl = parsed.toString();
+
+    const paramXml = token ? `\n      <Parameter name="token" value="${escapeXml(token)}" />` : "";
+
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say>${escapeXml(greeting)}</Say>
   <Connect>
-    <Stream url="${streamUrl}" />
+    <Stream url="${escapeXml(cleanUrl)}">${paramXml}
+    </Stream>
   </Connect>
   <Pause length="3600" />
 </Response>`;
