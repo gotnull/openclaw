@@ -7,6 +7,8 @@ export function isSystemdUnavailableDetail(detail?: string): boolean {
   const normalized = detail.toLowerCase();
   return (
     normalized.includes("systemctl --user unavailable") ||
+    normalized.includes("systemctl (user) unavailable") ||
+    normalized.includes("systemctl (system) unavailable") ||
     normalized.includes("systemctl not available") ||
     normalized.includes("not been booted with systemd") ||
     normalized.includes("failed to connect to bus") ||

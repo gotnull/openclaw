@@ -142,8 +142,61 @@ async function execSystemctl(
   return await execFileUtf8("systemctl", args);
 }
 
-export async function isSystemdUserServiceAvailable(): Promise<boolean> {
+/**
+ * Returns `["--user"]` when running in user-session scope, or `[]` when running
+ * in system scope (e.g. a system-level service without access to the user bus).
+ *
+ * Detection order:
+ * 1. `OPENCLAW_SYSTEMD_SCOPE=system` env var \u2192 system scope (no `--user`)
+ * 2. `OPENCLAW_SYSTEMD_SCOPE=user` env var \u2192 user scope (`--user`)
+ * 3. Auto-detect: try `systemctl --user status`; if it fails with a bus
+ *    connection error, fall back to system scope.
+ *
+ * The result is cached for the lifetime of the process.
+ */
+let _cachedScopeArgs: string[] | undefined;
+
+export async function resolveSystemctlScopeArgs(): Promise<string[]> {
+  if (_cachedScopeArgs !== undefined) {
+    return _cachedScopeArgs;
+  }
+
+  const explicit = process.env.OPENCLAW_SYSTEMD_SCOPE?.trim().toLowerCase();
+  if (explicit === "system") {
+    _cachedScopeArgs = [];
+    return _cachedScopeArgs;
+  }
+  if (explicit === "user") {
+    _cachedScopeArgs = ["--user"];
+    return _cachedScopeArgs;
+  }
+
+  // Auto-detect: try --user first.
   const res = await execSystemctl(["--user", "status"]);
+  if (res.code === 0) {
+    _cachedScopeArgs = ["--user"];
+    return _cachedScopeArgs;
+  }
+  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  const busFailure =
+    detail.includes("failed to connect") ||
+    detail.includes("not been booted") ||
+    detail.includes("no such file or directory") ||
+    detail.includes("not supported");
+  _cachedScopeArgs = busFailure ? [] : ["--user"];
+  return _cachedScopeArgs;
+}
+
+/** Helper: prepend the correct scope args to a systemctl command. */
+async function scopedSystemctl(
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const scope = await resolveSystemctlScopeArgs();
+  return await execSystemctl([...scope, ...args]);
+}
+
+export async function isSystemdUserServiceAvailable(): Promise<boolean> {
+  const res = await scopedSystemctl(["status"]);
   if (res.code === 0) {
     return true;
   }
@@ -170,15 +223,17 @@ export async function isSystemdUserServiceAvailable(): Promise<boolean> {
 }
 
 async function assertSystemdAvailable() {
-  const res = await execSystemctl(["--user", "status"]);
+  const scope = await resolveSystemctlScopeArgs();
+  const scopeLabel = scope.length > 0 ? "user" : "system";
+  const res = await scopedSystemctl(["status"]);
   if (res.code === 0) {
     return;
   }
   const detail = res.stderr || res.stdout;
   if (detail.toLowerCase().includes("not found")) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error("systemctl not available; systemd services are required on Linux.");
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw new Error(`systemctl (${scopeLabel}) unavailable: ${detail || "unknown error"}`.trim());
 }
 
 export async function installSystemdService({
@@ -216,17 +271,17 @@ export async function installSystemdService({
 
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctl(["--user", "daemon-reload"]);
+  const reload = await scopedSystemctl(["daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctl(["--user", "enable", unitName]);
+  const enable = await scopedSystemctl(["enable", unitName]);
   if (enable.code !== 0) {
     throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
-  const restart = await execSystemctl(["--user", "restart", unitName]);
+  const restart = await scopedSystemctl(["restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
@@ -260,7 +315,7 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable();
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
-  await execSystemctl(["--user", "disable", "--now", unitName]);
+  await scopedSystemctl(["disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPath(env);
   try {
@@ -280,7 +335,7 @@ async function runSystemdServiceAction(params: {
   await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(params.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", params.action, unitName]);
+  const res = await scopedSystemctl([params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
@@ -315,7 +370,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "is-enabled", unitName]);
+  const res = await scopedSystemctl(["is-enabled", unitName]);
   return res.code === 0;
 }
 
@@ -332,8 +387,7 @@ export async function readSystemdServiceRuntime(
   }
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl([
-    "--user",
+  const res = await scopedSystemctl([
     "show",
     unitName,
     "--no-page",
@@ -369,7 +423,7 @@ export type LegacySystemdUnit = {
 };
 
 async function isSystemctlAvailable(): Promise<boolean> {
-  const res = await execSystemctl(["--user", "status"]);
+  const res = await scopedSystemctl(["status"]);
   if (res.code === 0) {
     return true;
   }
@@ -391,7 +445,7 @@ export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<Le
     }
     let enabled = false;
     if (systemctlAvailable) {
-      const res = await execSystemctl(["--user", "is-enabled", `${name}.service`]);
+      const res = await scopedSystemctl(["is-enabled", `${name}.service`]);
       enabled = res.code === 0;
     }
     if (exists || enabled) {
@@ -413,7 +467,7 @@ export async function uninstallLegacySystemdUnits({
   const systemctlAvailable = await isSystemctlAvailable();
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctl(["--user", "disable", "--now", `${unit.name}.service`]);
+      await scopedSystemctl(["disable", "--now", `${unit.name}.service`]);
     } else {
       stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
     }
